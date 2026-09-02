@@ -1,5 +1,7 @@
 # Copyright (c) 2023, NVIDIA CORPORATION. All rights reserved.
 
+from contextlib import contextmanager, nullcontext
+from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
 import pytest
@@ -7,7 +9,127 @@ import torch
 import torch.nn as nn
 
 from megatron.core import fp8_utils
+from megatron.core.transformer.transformer_config import TransformerConfig
 from tests.unit_tests.test_utilities import Utils
+
+
+def test_quantized_param_init_memory_context_is_nested_and_scoped():
+    events = []
+
+    @contextmanager
+    def memory_context():
+        events.append("memory-enter")
+        yield
+        events.append("memory-exit")
+
+    @contextmanager
+    def te_context():
+        events.append("te-enter")
+        yield
+        events.append("te-exit")
+
+    with fp8_utils.quantized_param_init_memory_context(memory_context):
+        with fp8_utils._with_quantized_param_init_memory_context(te_context()):
+            events.append("body")
+
+    assert events == ["memory-enter", "te-enter", "body", "te-exit", "memory-exit"]
+
+    events.clear()
+    with fp8_utils._with_quantized_param_init_memory_context(nullcontext()):
+        events.append("unscoped")
+    assert events == ["unscoped"]
+
+
+@pytest.mark.parametrize(
+    ("kwargs", "error"),
+    [
+        ({"fp8_backward_override": "high_precision"}, "together with fp8 mode"),
+        (
+            {
+                "fp8": "hybrid",
+                "fp8_recipe": "delayed",
+                "fp8_backward_override": "high_precision",
+            },
+            "mxfp8.*only",
+        ),
+        (
+            {
+                "fp8": "hybrid",
+                "fp8_recipe": "blockwise",
+                "fp8_backward_override": "dequantized",
+            },
+            "mxfp8.*only",
+        ),
+        (
+            {
+                "fp8": "hybrid",
+                "fp8_recipe": "mxfp8",
+                "fp8_param": True,
+                "omit_columnwise_primary_weight_storage": True,
+            },
+            "requires fp8_backward_override",
+        ),
+    ],
+)
+def test_transformer_config_rejects_invalid_fp8_backward_override_combinations(kwargs, error):
+    with pytest.raises(ValueError, match=error):
+        TransformerConfig(num_layers=1, num_attention_heads=1, **kwargs)
+
+
+@pytest.mark.skipif(not fp8_utils.HAVE_TE, reason="Transformer Engine is not installed")
+@pytest.mark.parametrize(
+    ("backward_override", "omit_columnwise"),
+    [
+        (None, False),
+        ("high_precision", False),
+        ("high_precision", True),
+        ("dequantized", True),
+    ],
+)
+def test_fp8_init_uses_explicit_columnwise_storage_contract(backward_override, omit_columnwise):
+    config = TransformerConfig(
+        num_layers=1,
+        num_attention_heads=1,
+        fp8="hybrid",
+        fp8_recipe="mxfp8",
+        fp8_param=True,
+        fp8_backward_override=backward_override,
+        omit_columnwise_primary_weight_storage=omit_columnwise,
+    )
+    constructor_args = {}
+    init_args = {}
+
+    def recipe_constructor(*, fp8_format, fp8_dpa=False, backward_override=None):
+        constructor_args["backward_override"] = backward_override
+        return SimpleNamespace(backward_override=backward_override, mxfp8=lambda: True)
+
+    def model_init(
+        *,
+        enabled=True,
+        recipe=None,
+        preserve_high_precision_init_val=False,
+        omit_columnwise_primary_weight_storage=False,
+    ):
+        init_args["recipe"] = recipe
+        init_args["omit_columnwise"] = omit_columnwise_primary_weight_storage
+        return nullcontext()
+
+    with (
+        patch.object(fp8_utils, "is_te_min_version", return_value=True),
+        patch.object(
+            fp8_utils.transformer_engine.common.recipe,
+            "MXFP8BlockScaling",
+            recipe_constructor,
+        ),
+        patch.object(fp8_utils.parallel_state, "model_parallel_is_initialized", return_value=False),
+        patch.object(fp8_utils.transformer_engine.pytorch, "quantized_model_init", model_init),
+    ):
+        with fp8_utils.get_fp8_context(config, is_init=True):
+            pass
+
+    assert constructor_args["backward_override"] == backward_override
+    assert init_args["recipe"].backward_override == backward_override
+    assert init_args["omit_columnwise"] is omit_columnwise
 
 
 class MockTELinear(nn.Module):
