@@ -3,7 +3,6 @@
 """Utility functions related to FP8 that are used throughout Megatron core"""
 
 import importlib
-import inspect
 import weakref
 from contextlib import ExitStack, contextmanager, nullcontext
 from contextvars import ContextVar
@@ -778,18 +777,6 @@ if HAVE_TE:
     from megatron.core import parallel_state
     from megatron.core.extensions.transformer_engine import TEDelayedScaling
 
-    def _construct_fp8_recipe(recipe_constructor, config: TransformerConfig, **kwargs):
-        """Construct a recipe with an explicit backward override when the TE API supports it."""
-        backward_override = getattr(config, "fp8_backward_override", None)
-        if "backward_override" in inspect.signature(recipe_constructor).parameters:
-            kwargs["backward_override"] = backward_override
-        elif backward_override is not None:
-            raise RuntimeError(
-                f"{recipe_constructor.__name__} does not support fp8_backward_override; "
-                "install a newer Transformer Engine version."
-            )
-        return recipe_constructor(**kwargs)
-
     def get_fp8_recipe(config: TransformerConfig):
         """Return fp8 recipe.
 
@@ -824,11 +811,8 @@ if HAVE_TE:
                     fp8_format=fp8_format
                 )
             elif config.fp8_recipe == Fp8Recipe.mxfp8:
-                fp8_recipe = _construct_fp8_recipe(
-                    transformer_engine.common.recipe.MXFP8BlockScaling,
-                    config,
-                    fp8_format=fp8_format,
-                    fp8_dpa=config.fp8_dot_product_attention,
+                fp8_recipe = transformer_engine.common.recipe.MXFP8BlockScaling(
+                    fp8_format=fp8_format, fp8_dpa=config.fp8_dot_product_attention
                 )
             elif config.fp8_recipe == Fp8Recipe.custom:
                 assert config.fp8_quantizer_factory is not None
@@ -889,17 +873,20 @@ if HAVE_TE:
                     enabled=True, fp8_recipe=fp8_recipe, fp8_group=fp8_group
                 )
             else:
-                model_init = getattr(transformer_engine.pytorch, "quantized_model_init", None)
-                if model_init is None:
-                    model_init = transformer_engine.pytorch.fp8_model_init
-                model_init_parameters = inspect.signature(model_init).parameters
-                context_args = {"enabled": True}
-                if "recipe" in model_init_parameters:
-                    context_args["recipe"] = fp8_recipe
-                if "preserve_high_precision_init_val" in model_init_parameters:
-                    context_args["preserve_high_precision_init_val"] = torch.is_grad_enabled()
+                import inspect
 
-                fp8_context = model_init(**context_args)
+                context_args = {"enabled": True}
+                # Check if fp8_model_init supports setting recipe
+                if "recipe" in (
+                    inspect.signature(transformer_engine.pytorch.fp8_model_init).parameters
+                ):
+                    context_args["recipe"] = fp8_recipe
+                # Check if fp8_model_init supports preserve_high_precision_init_val
+                if "preserve_high_precision_init_val" in (
+                    inspect.signature(transformer_engine.pytorch.fp8_model_init).parameters
+                ):
+                    context_args["preserve_high_precision_init_val"] = torch.is_grad_enabled()
+                fp8_context = transformer_engine.pytorch.fp8_model_init(**context_args)
                 fp8_context = _with_quantized_param_init_memory_context(fp8_context)
 
             # First / last layer in bf16 isn't supported with delayed scaling since it

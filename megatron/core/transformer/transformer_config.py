@@ -657,11 +657,6 @@ class TransformerConfig(ModelParallelConfig):
     """Python import path to a callable quantizer factory, e.g., package.module.quantizer_factory.
     Required when fp8_recipe is custom."""
 
-    fp8_backward_override: Optional[Literal['high_precision', 'dequantized']] = None
-    """Override the MXFP8 backward precision mode. ``high_precision`` saves high-precision
-    operands for backward, while ``dequantized`` dequantizes saved operands before backward.
-    TE uses the initialization recipe to determine primary-weight storage automatically."""
-
     fp8_margin: int = 0
     """Margin for the scaling factor computation."""
 
@@ -1899,16 +1894,6 @@ class TransformerConfig(ModelParallelConfig):
 
         if self.fp8_param and not self.fp8:
             raise ValueError("fp8_param must be used together with fp8 mode.")
-
-        if self.fp8_backward_override not in (None, 'high_precision', 'dequantized'):
-            raise ValueError(
-                "fp8_backward_override must be None, 'high_precision', or 'dequantized'."
-            )
-        if self.fp8_backward_override is not None:
-            if not self.fp8:
-                raise ValueError("fp8_backward_override must be used together with fp8 mode.")
-            if self.fp8_recipe != Fp8Recipe.mxfp8:
-                raise ValueError("fp8_backward_override currently supports fp8_recipe='mxfp8' only.")
 
         if self.fp8_output_proj:
             if not self.fp8:
