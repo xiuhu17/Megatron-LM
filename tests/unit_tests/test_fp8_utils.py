@@ -60,15 +60,6 @@ def test_quantized_param_init_memory_context_is_nested_and_scoped():
             },
             "mxfp8.*only",
         ),
-        (
-            {
-                "fp8": "hybrid",
-                "fp8_recipe": "mxfp8",
-                "fp8_param": True,
-                "omit_columnwise_primary_weight_storage": True,
-            },
-            "requires fp8_backward_override",
-        ),
     ],
 )
 def test_transformer_config_rejects_invalid_fp8_backward_override_combinations(kwargs, error):
@@ -77,16 +68,9 @@ def test_transformer_config_rejects_invalid_fp8_backward_override_combinations(k
 
 
 @pytest.mark.skipif(not fp8_utils.HAVE_TE, reason="Transformer Engine is not installed")
-@pytest.mark.parametrize(
-    ("backward_override", "omit_columnwise"),
-    [
-        (None, False),
-        ("high_precision", False),
-        ("high_precision", True),
-        ("dequantized", True),
-    ],
-)
-def test_fp8_init_uses_explicit_columnwise_storage_contract(backward_override, omit_columnwise):
+@pytest.mark.parametrize("backward_override", [None, "high_precision", "dequantized"])
+def test_fp8_init_passes_backward_override_via_recipe(backward_override):
+    """The TE init API receives the recipe without the removed storage-policy argument."""
     config = TransformerConfig(
         num_layers=1,
         num_attention_heads=1,
@@ -94,7 +78,6 @@ def test_fp8_init_uses_explicit_columnwise_storage_contract(backward_override, o
         fp8_recipe="mxfp8",
         fp8_param=True,
         fp8_backward_override=backward_override,
-        omit_columnwise_primary_weight_storage=omit_columnwise,
     )
     constructor_args = {}
     init_args = {}
@@ -108,10 +91,8 @@ def test_fp8_init_uses_explicit_columnwise_storage_contract(backward_override, o
         enabled=True,
         recipe=None,
         preserve_high_precision_init_val=False,
-        omit_columnwise_primary_weight_storage=False,
     ):
         init_args["recipe"] = recipe
-        init_args["omit_columnwise"] = omit_columnwise_primary_weight_storage
         return nullcontext()
 
     with (
@@ -129,7 +110,6 @@ def test_fp8_init_uses_explicit_columnwise_storage_contract(backward_override, o
 
     assert constructor_args["backward_override"] == backward_override
     assert init_args["recipe"].backward_override == backward_override
-    assert init_args["omit_columnwise"] is omit_columnwise
 
 
 class MockTELinear(nn.Module):

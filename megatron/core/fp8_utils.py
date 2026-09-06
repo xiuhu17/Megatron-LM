@@ -899,16 +899,6 @@ if HAVE_TE:
                 if "preserve_high_precision_init_val" in model_init_parameters:
                     context_args["preserve_high_precision_init_val"] = torch.is_grad_enabled()
 
-                omit_columnwise = config.omit_columnwise_primary_weight_storage
-                if "omit_columnwise_primary_weight_storage" in model_init_parameters:
-                    context_args["omit_columnwise_primary_weight_storage"] = omit_columnwise
-                elif omit_columnwise:
-                    raise RuntimeError(
-                        "omit_columnwise_primary_weight_storage requires a Transformer Engine "
-                        "version whose quantized_model_init supports "
-                        "omit_columnwise_primary_weight_storage."
-                    )
-
                 fp8_context = model_init(**context_args)
                 fp8_context = _with_quantized_param_init_memory_context(fp8_context)
 

@@ -659,12 +659,8 @@ class TransformerConfig(ModelParallelConfig):
 
     fp8_backward_override: Optional[Literal['high_precision', 'dequantized']] = None
     """Override the MXFP8 backward precision mode. ``high_precision`` saves high-precision
-    operands for backward, while ``dequantized`` dequantizes saved operands before backward."""
-
-    omit_columnwise_primary_weight_storage: bool = False
-    """Initialize MXFP8 primary weights without columnwise storage. This is a lifecycle contract
-    for frozen primary weights, such as a LoRA base: the caller must ensure these weights never
-    enter optimizer writeback. Full-parameter training must leave this disabled."""
+    operands for backward, while ``dequantized`` dequantizes saved operands before backward.
+    TE uses the initialization recipe to determine primary-weight storage automatically."""
 
     fp8_margin: int = 0
     """Margin for the scaling factor computation."""
@@ -1913,22 +1909,6 @@ class TransformerConfig(ModelParallelConfig):
                 raise ValueError("fp8_backward_override must be used together with fp8 mode.")
             if self.fp8_recipe != Fp8Recipe.mxfp8:
                 raise ValueError("fp8_backward_override currently supports fp8_recipe='mxfp8' only.")
-
-        if self.omit_columnwise_primary_weight_storage:
-            if not self.fp8_param:
-                raise ValueError(
-                    "omit_columnwise_primary_weight_storage requires fp8_param to be enabled."
-                )
-            if self.fp8_recipe != Fp8Recipe.mxfp8:
-                raise ValueError(
-                    "omit_columnwise_primary_weight_storage currently supports "
-                    "fp8_recipe='mxfp8' only."
-                )
-            if self.fp8_backward_override is None:
-                raise ValueError(
-                    "omit_columnwise_primary_weight_storage requires "
-                    "fp8_backward_override='high_precision' or 'dequantized'."
-                )
 
         if self.fp8_output_proj:
             if not self.fp8:
